@@ -74,7 +74,12 @@ function parseWindSpeed(windSpeedStr) {
   return Math.max(...nums.map(Number));
 }
 
-function buildTimeSeries(periods, skyCoverMap, gustMap) {
+function dewpointInUnit(celsius, unit) {
+  if (celsius === null || celsius === undefined) return null;
+  return unit === 'C' ? Math.round(celsius) : Math.round(celsius * 9 / 5 + 32);
+}
+
+function buildTimeSeries(periods, skyCoverMap, gustMap, dewpointMap) {
   const TARGET_HOURS = new Set([8, 10, 12, 14, 16, 18, 20, 1]);
   const LABEL_HOURS = new Set([8, 12, 18]);
   const TIME_STRS = { 1: '1am', 8: '8am', 10: '10am', 12: 'noon', 14: '2pm', 16: '4pm', 18: '6pm', 20: '8pm' };
@@ -101,6 +106,7 @@ function buildTimeSeries(periods, skyCoverMap, gustMap) {
       gust: gustMap ? (gustMap[utcKey] ?? 0) : 0,
       windDir: p.windDirection || '',
       skyCover: skyCoverMap ? (skyCoverMap[utcKey] ?? null) : null,
+      dewpoint: dewpointMap ? dewpointInUnit(dewpointMap[utcKey], p.temperatureUnit) : null,
       shortForecast: p.shortForecast || ''
     });
 
@@ -197,23 +203,41 @@ function renderCharts(points) {
 
   // Temperature
     const temps = points.map(p => p.temp);
-  const tempMin = Math.min(...temps);
-  const tempMax = Math.max(...temps);
+    const dewpoints = points.map(p => p.dewpoint);
+  const hasDewpoint = dewpoints.some(d => d !== null && d !== undefined);
+  const tempRangeVals = hasDewpoint ? [...temps, ...dewpoints.filter(d => d !== null)] : temps;
+  const tempMin = Math.min(...tempRangeVals);
+  const tempMax = Math.max(...tempRangeVals);
   const freezingShape = {
     type: 'line', xref: 'paper', yref: 'y',
     x0: 0, x1: 1, y0: 32, y1: 32,
     line: { color: '#5b8dd9', width: 1, dash: 'dot' }
   };
-  Plotly.newPlot('chart-temp', [{
+  const tempTraces = [{
     type: 'scatter',
     mode: 'lines+markers',
     x: xs,
     y: temps,
     text: labels,
+    name: 'Temperature',
     line: { color: '#d4603a', width: 2 },
     marker: { color: points.map(p => tempColor(p.temp, p.unit)), size: 7, line: { color: '#fff', width: 1 } },
     hovertemplate: '%{text}<br>%{y}°' + unit + '<extra></extra>'
-  }], {
+  }];
+  if (hasDewpoint) {
+    tempTraces.push({
+      type: 'scatter',
+      mode: 'lines+markers',
+      x: xs,
+      y: dewpoints,
+      text: labels,
+      name: 'Dewpoint',
+      line: { color: '#4a90d9', width: 2 },
+      marker: { color: '#4a90d9', size: 5, line: { color: '#fff', width: 1 } },
+      hovertemplate: '%{text}<br>Dewpoint: %{y}°' + unit + '<extra></extra>'
+    });
+  }
+  Plotly.newPlot('chart-temp', tempTraces, {
     ...baseLayout('Temperature', `°${unit}`, [tempMin - 8, tempMax + 8], xTicks),
     shapes: [...nightShapes, ...(unit === 'F' ? [freezingShape] : [])]
   }, CHART_CONFIG);
@@ -427,7 +451,10 @@ async function search(query) {
     const gustMap = gridData?.windGust?.values
       ? buildHourlyMap(gridData.windGust.values, v => Math.round(v * 0.621371))
       : null;
-    const series = buildTimeSeries(periods, skyCoverMap, gustMap);
+    const dewpointMap = gridData?.dewpoint?.values
+      ? buildHourlyMap(gridData.dewpoint.values)
+      : null;
+    const series = buildTimeSeries(periods, skyCoverMap, gustMap, dewpointMap);
 
     if (series.length === 0) {
       setStatus('No matching forecast hours found.', true);
